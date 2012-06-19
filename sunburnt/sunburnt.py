@@ -10,6 +10,7 @@ import warnings
 
 from .schema import SolrSchema, SolrError
 from .search import LuceneQuery, MltSolrSearch, SolrSearch, params_from_dict
+from .util import unicode_urlencode
 
 MAX_LENGTH_GET_URL = 2048
 # Jetty default is 4096; Tomcat default is 8192; picking 2048 to be conservative.
@@ -23,12 +24,15 @@ class SolrConnection(object):
             self.http_connection = httplib2.Http()
         self.url = url.rstrip("/") + "/"
         self.update_url = self.url + "update/"
+        self.extract_url = self.url + "update/extract/"
         self.select_url = self.url + "select/"
         self.mlt_url = self.url + "mlt/"
         self.retry_timeout = retry_timeout
         self.max_length_get_url = max_length_get_url
 
     def request(self, *args, **kwargs):
+        if 'body' in kwargs and isinstance(kwargs['body'], basestring):
+            kwargs['body'] = bytearray(kwargs['body'])
         try:
             return self.http_connection.request(*args, **kwargs)
         except socket.error:
@@ -59,6 +63,37 @@ class SolrConnection(object):
         else:
             headers = {}
         url = self.url_for_update(**kwargs)
+        r, c = self.request(url, method="POST", body=body,
+                            headers=headers)
+        if r.status != 200:
+            raise SolrError(r, c)
+
+    def update_extract(self, fields_dict):
+        """Submit a binary document to be extracted and parsed by SOLR-Cell
+        
+        All fields except `body` are submitted as URL parameters. The `body`
+        field must be a file-like object supporting read(). Solr intermingles
+        the values submitted with those extracted from the file, to workaround
+        this we prefix the submitted field names with override_ and rely on the
+        mapping in our solrconfig.xml to remove the prefix.
+        
+        WARNING: The entire contents of the body field are read into memory
+        See:
+            http://code.google.com/p/httplib2/issues/detail?id=37
+            https://d4.define.logica.com/ticket/1642
+        """
+        body = fields_dict.pop('body').read() # Potentially vast memory usage
+        headers = {"Content-Type": "binary/octet-stream; charset=utf-8"}
+        # NB Key is encoded now because params_from_dict() is defined
+        # to take **kwargs and in Python < 2.7 passing a unicode key raises
+        # a TypeError http://bugs.python.org/issue2646
+        params = params_from_dict(**dict(
+                    ((u'literal.override_%s' % (k,)).encode('utf-8'), v)
+                     for k, v in fields_dict.iteritems()
+                     if v is not None))
+        if 'filename' in fields_dict:
+            params.append(('resource.name', fields_dict['filename']))
+        url = "%s?%s" % (self.extract_url, unicode_urlencode(params))
         r, c = self.request(url, method="POST", body=body,
                             headers=headers)
         if r.status != 200:
@@ -163,11 +198,19 @@ class SolrInterface(object):
             schemadoc = StringIO.StringIO(c)
         self.schema = SolrSchema(schemadoc)
 
-    def add(self, docs, chunk=100, **kwargs):
+    def add(self, docs, chunk=100, extract=False, **kwargs):
         if not self.writeable:
             raise TypeError("This Solr instance is only for reading")
         if hasattr(docs, "items") or not hasattr(docs, "__iter__"):
             docs = [docs]
+        if extract:
+            for doc in docs:
+                fields_dict = dict((field, getattr(doc, field))
+                                   for field in self.schema.fields
+                                   if hasattr(doc, field))
+                fields_dict.update(kwargs)
+                self.conn.update_extract(fields_dict)
+            return
         # to avoid making messages too large, we break the message every
         # chunk docs.
         for doc_chunk in grouper(docs, chunk):

@@ -1,4 +1,7 @@
 import re
+import urllib
+
+__all__ = ['strip_invalid_xml_chars', 'unicode_urlencode']
 
 _valid_patt = re.compile(u'[^\u0020-\uD7FF\x09\x0A\x0D'
                          u'\uE000-\uFFFD\U00010000-\U0010FFFF]', re.U)
@@ -16,3 +19,18 @@ def strip_invalid_xml_chars(s, substitute=u''):
     u'abcd\tef\n ghi'
     '''
     return _valid_patt.sub(substitute, s)
+
+# Adapted from trac.trac.util.text.unicode_urlencode()
+def unicode_urlencode(params):
+    """A unicode aware version of urllib.urlencode.
+    """
+    if isinstance(params, dict):
+        params = params.iteritems()
+    l = []
+    for k, v in params:
+        k = urllib.quote_plus(str(k))
+        if isinstance(v, unicode):
+            l.append(k + '=' + urllib.quote_plus(v.encode('utf-8')))
+        else:
+            l.append(k + '=' + urllib.quote_plus(str(v)))
+    return '&'.join(l)
