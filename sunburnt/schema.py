@@ -11,6 +11,7 @@ import lxml.etree
 
 from .dates import datetime_from_w3_datestring
 from .strings import RawString, SolrString, WildcardString
+from util import strip_invalid_xml_chars
 
 try:
     import pytz
@@ -157,7 +158,7 @@ class SolrField(object):
         return self.normalize(value)
 
     def to_solr(self, value):
-        return unicode(value)
+        return strip_invalid_xml_chars(unicode(value))
 
     def to_query(self, value):
         return RawString(self.to_solr(value)).escape_for_lqs_term()
