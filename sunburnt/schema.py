@@ -11,7 +11,7 @@ import lxml.etree
 
 from .dates import datetime_from_w3_datestring
 from .strings import RawString, SolrString, WildcardString
-from util import strip_invalid_xml_chars
+from .util import strip_invalid_xml_chars
 
 try:
     import pytz
